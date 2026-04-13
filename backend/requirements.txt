@@ -1,0 +1,11 @@
+flask>=2.3.0
+flask-cors>=4.0.0
+spacy
+nltk>=3.8.1
+
+# After installing, run these commands once:
+#   python -m spacy download en_core_web_sm
+#
+# Optional (neural coreference):
+#   pip install coreferee
+#   python -m coreferee install en

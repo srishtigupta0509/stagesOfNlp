@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NLP Visualization Lab</title>
+
+<!-- ── Google Fonts: Outfit (display) + Space Mono (code tokens) ──────── -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+<!-- No client-side NLP library needed — all analysis is done by the
+     Python backend (spaCy + NLTK WordNet). See backend/app.py           -->
+
+<style>
+/* ════════════════════════════════════════════════════════════════════════
+   CSS VARIABLES  ─  Purple Gradient Theme
+   ════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* Purple gradient background (matches reference image) */
+  --grad-a:   #3B2678;
+  --grad-b:   #6A4BB5;
+  --grad-c:   #9472D6;
+
+  /* Glass surfaces */
+  --glass:          rgba(255,255,255,0.10);
+  --glass-strong:   rgba(255,255,255,0.16);
+  --glass-border:   rgba(255,255,255,0.18);
+  --glass-shadow:   rgba(0,0,0,0.25);
+
+  /* Text */
+  --text:   #FFFFFF;
+  --soft:   rgba(255,255,255,0.75);
+  --muted:  rgba(255,255,255,0.45);
+
+  /* ── Stage accent colours (bright so they pop on purple) ─── */
+  --lex:       #67E8F9;   /* cyan-sky    – Lexical   */
+  --lex-dim:   rgba(103,232,249,0.14);
+  --syn:       #C4B5FD;   /* violet-300  – Syntactic */
+  --syn-dim:   rgba(196,181,253,0.14);
+  --sem:       #6EE7B7;   /* emerald-300 – Semantic  */
+  --sem-dim:   rgba(110,231,183,0.14);
+  --dis:       #FCD34D;   /* amber-300   – Discourse */
+  --dis-dim:   rgba(252,211,77,0.14);
+  --prag:      #F9A8D4;   /* pink-300    – Pragmatic */
+  --prag-dim:  rgba(249,168,212,0.14);
+
+  --radius: 14px;
+  --ease:   cubic-bezier(0.4,0,0.2,1);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RESET & BASE
+   ════════════════════════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px;scroll-behavior:smooth}
+body{
+  font-family:'Outfit',sans-serif;
+  background: linear-gradient(145deg, var(--grad-a) 0%, var(--grad-b) 52%, var(--grad-c) 100%);
+  background-attachment: fixed;
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+button{cursor:pointer;font-family:inherit}
+input,textarea,select{font-family:inherit}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:3px}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ANIMATED BACKGROUND  (subtle floating orbs)
+   ════════════════════════════════════════════════════════════════════════ */
+#bg-canvas{
+  position:fixed;inset:0;
+  pointer-events:none;
+  z-index:0;
+  opacity:.4;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   LAYOUT
+   ════════════════════════════════════════════════════════════════════════ */
+.app{
+  position:relative;
+  z-index:1;
+  max-width:1300px;
+  margin:0 auto;
+  padding:2rem 1.5rem 5rem;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   HEADER
+   ════════════════════════════════════════════════════════════════════════ */
+header{text-align:center;margin-bottom:2.5rem}
+.header-badge{
+  display:inline-flex;align-items:center;gap:.4rem;
+  font-family:'Space Mono',monospace;
+  font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--lex);
+  background:rgba(103,232,249,.1);
+  border:1px solid rgba(103,232,249,.35);
+  border-radius:999px;
+  padding:.25rem 1rem;
+  margin-bottom:.9rem;
+  animation:badge-glow 3s ease-in-out infinite;
+}
+@keyframes badge-glow{
+  0%,100%{box-shadow:0 0 0 0 rgba(103,232,249,.35)}
+  50%     {box-shadow:0 0 0 7px rgba(103,232,249,0)}
+}
+h1{
+  font-size:clamp(1.9rem,4.5vw,3.2rem);
+  font-weight:800;letter-spacing:-.02em;
+  background:linear-gradient(135deg,#fff 30%,var(--lex) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+  line-height:1.15;margin-bottom:.5rem;
+}
+header p{color:var(--soft);font-size:.95rem;max-width:520px;margin:0 auto}
+
+/* ── Backend server status bar ─────────────────────────────────────────── */
+.server-bar{
+  display:flex;align-items:center;flex-wrap:wrap;gap:.6rem;
+  margin-top:.75rem;
+  padding:.55rem .9rem;
+  background:rgba(0,0,0,.2);
+  border:1px solid var(--glass-border);
+  border-radius:9px;
+  font-size:.78rem;
+}
+.srv-dot{
+  width:8px;height:8px;border-radius:50%;flex-shrink:0;
+  background:#FCD34D;
+  animation:dot-blink 1.4s ease-in-out infinite;
+}
+.srv-dot.ok  {background:#6EE7B7;animation:dot-blink 2.5s ease-in-out infinite}
+.srv-dot.err {background:#f87171;animation:none}
+@keyframes dot-blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+#srv-label{color:var(--soft);flex:1 1 auto}
+#srv-url-input{
+  background:rgba(255,255,255,.07);
+  border:1px solid var(--glass-border);
+  border-radius:6px;
+  color:var(--text);padding:.3rem .65rem;
+  font-size:.75rem;font-family:'Space Mono',monospace;
+  outline:none;width:200px;
+  transition:border-color .2s;
+}
+#srv-url-input:focus{border-color:var(--lex)}
+#btn-ping{
+  padding:.3rem .7rem;font-size:.75rem;font-weight:700;
+  background:rgba(103,232,249,.12);
+  border:1px solid rgba(103,232,249,.3);
+  border-radius:6px;color:var(--lex);cursor:pointer;
+  transition:background .2s;
+}
+#btn-ping:hover{background:rgba(103,232,249,.22)}
+
+/* Stack info chips from NER / model info */
+.info-chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.6rem}
+.info-chip{
+  font-size:.68rem;font-weight:600;
+  padding:.18rem .55rem;border-radius:999px;
+  background:rgba(255,255,255,.08);
+  border:1px solid var(--glass-border);
+  color:var(--soft);
+}
+.info-chip.ner{background:var(--sem-dim);border-color:rgba(110,231,183,.25);color:var(--sem)}
+
+/* ════════════════════════════════════════════════════════════════════════
+   GLASS MIXIN  (shared by cards, inputs, panels)
+   ════════════════════════════════════════════════════════════════════════ */
+.glass{
+  background:var(--glass);
+  backdrop-filter:blur(22px);
+  -webkit-backdrop-filter:blur(22px);
+  border:1px solid var(--glass-border);
+  border-radius:var(--radius);
+  box-shadow:0 8px 32px var(--glass-shadow);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   INPUT PANEL
+   ════════════════════════════════════════════════════════════════════════ */
+.input-panel{padding:1.5rem;margin-bottom:1.75rem}
+.input-row{display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end}
+.input-group{flex:1 1 360px}
+.input-group label{
+  display:block;
+  font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:.4rem;font-weight:600;
+}
+#sentence-input{
+  width:100%;
+  background:rgba(255,255,255,0.07);
+  border:1px solid var(--glass-border);
+  border-radius:9px;
+  color:var(--text);
+  font-size:1rem;
+  padding:.75rem 1rem;
+  outline:none;
+  resize:vertical;
+  min-height:52px;max-height:130px;
+  transition:border-color .3s,box-shadow .3s;
+}
+#sentence-input::placeholder{color:var(--muted)}
+#sentence-input:focus{
+  border-color:var(--lex);
+  box-shadow:0 0 0 3px rgba(103,232,249,.18);
+}
+.controls{display:flex;gap:.55rem;flex-wrap:wrap;align-items:center}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;gap:.4rem;
+  padding:.62rem 1.15rem;border-radius:9px;
+  font-size:.87rem;font-weight:700;border:none;
+  white-space:nowrap;
+  transition:transform .15s,box-shadow .2s,opacity .2s;
+}
+.btn:active{transform:scale(.95)}
+.btn:disabled{opacity:.35;pointer-events:none}
+
+.btn-primary{
+  background:linear-gradient(135deg,#5B4FE8,var(--lex));
+  color:#fff;
+  box-shadow:0 4px 18px rgba(103,232,249,.3);
+}
+.btn-primary:hover{box-shadow:0 6px 24px rgba(103,232,249,.5);transform:translateY(-1px)}
+
+.btn-secondary{
+  background:rgba(255,255,255,.1);
+  color:var(--text);
+  border:1px solid var(--glass-border);
+}
+.btn-secondary:hover{background:rgba(255,255,255,.18)}
+
+.btn-danger{
+  background:rgba(239,68,68,.18);
+  color:#fca5a5;
+  border:1px solid rgba(239,68,68,.35);
+}
+.btn-danger:hover{background:rgba(239,68,68,.28)}
+
+/* ── Example select ──────────────────────────────────────────────────── */
+#example-select{
+  background:rgba(255,255,255,.08);
+  border:1px solid var(--glass-border);
+  border-radius:9px;color:var(--text);
+  padding:.62rem 1rem;font-size:.87rem;
+  outline:none;cursor:pointer;
+  transition:border-color .2s;
+}
+#example-select:focus{border-color:var(--lex)}
+#example-select option{background:#4A3585;color:#fff}
+
+/* ── Step mode toggle ────────────────────────────────────────────────── */
+.mode-row{
+  display:flex;align-items:center;gap:1rem;
+  margin-top:.8rem;flex-wrap:wrap;
+}
+.toggle-wrap{display:flex;align-items:center;gap:.5rem;cursor:pointer}
+.toggle-track{
+  width:42px;height:22px;
+  background:rgba(255,255,255,.12);
+  border-radius:999px;position:relative;
+  border:1px solid var(--glass-border);
+  transition:background .3s;
+}
+.toggle-track.on{background:var(--lex)}
+.toggle-knob{
+  width:16px;height:16px;background:#fff;border-radius:50%;
+  position:absolute;top:2px;left:2px;
+  transition:transform .3s var(--ease);
+}
+.toggle-track.on .toggle-knob{transform:translateX(20px)}
+.toggle-label{font-size:.82rem;color:var(--soft)}
+#mode-hint{font-size:.78rem;color:var(--muted)}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PROGRESS BAR
+   ════════════════════════════════════════════════════════════════════════ */
+.progress-wrap{margin-bottom:1.5rem}
+.progress-meta{
+  display:flex;justify-content:space-between;
+  font-size:.72rem;color:var(--muted);
+  margin-bottom:.4rem;
+  font-family:'Space Mono',monospace;
+}
+.progress-track{
+  height:3px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden;
+}
+.progress-fill{
+  height:100%;width:0%;
+  background:linear-gradient(90deg,var(--lex),var(--syn),var(--sem),var(--dis),var(--prag));
+  transition:width .9s var(--ease);border-radius:2px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PIPELINE BAR
+   ════════════════════════════════════════════════════════════════════════ */
+.pipeline-bar{
+  display:flex;align-items:center;
+  margin-bottom:2rem;
+  overflow-x:auto;padding-bottom:.5rem;
+}
+.pipeline-bar::-webkit-scrollbar{height:3px}
+.pipeline-bar::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15)}
+
+.pipe-node{
+  display:flex;flex-direction:column;align-items:center;gap:.3rem;
+  flex-shrink:0;position:relative;
+}
+.pipe-dot{
+  width:46px;height:46px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.25rem;
+  background:rgba(255,255,255,.07);
+  transition:all .4s var(--ease);
+  position:relative;
+}
+.pipe-dot .chk{
+  position:absolute;top:-3px;right:-3px;
+  width:16px;height:16px;
+  background:#22c55e;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.55rem;color:#fff;
+  opacity:0;transform:scale(0);
+  transition:opacity .3s,transform .35s var(--ease);
+}
+.pipe-dot.done .chk{opacity:1;transform:scale(1)}
+.pipe-lbl{
+  font-size:.66rem;font-weight:700;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted);
+  transition:color .3s;
+}
+.pipe-connector{
+  flex:1;height:2px;min-width:20px;
+  background:rgba(255,255,255,.1);
+  position:relative;overflow:hidden;
+}
+.pipe-conn-fill{
+  position:absolute;left:-100%;top:0;height:100%;width:100%;
+  transition:left .5s;
+}
+.pipe-connector.lit .pipe-conn-fill{
+  left:100%;
+  animation:flow 1s linear infinite;
+}
+@keyframes flow{from{left:-100%}to{left:100%}}
+
+.pipe-node.active .pipe-dot{
+  border-color:var(--sc,var(--lex));
+  box-shadow:0 0 0 7px color-mix(in srgb,var(--sc,var(--lex)) 22%,transparent),
+             0 0 22px color-mix(in srgb,var(--sc,var(--lex)) 45%,transparent);
+  animation:node-pulse 1.5s ease-in-out infinite;
+}
+@keyframes node-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+.pipe-node.active .pipe-lbl{color:var(--sc,var(--lex))}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE CARDS
+   ════════════════════════════════════════════════════════════════════════ */
+.stages-wrap{display:flex;flex-direction:column;gap:1.4rem}
+
+.stage-card{
+  background:var(--glass);
+  backdrop-filter:blur(22px);
+  -webkit-backdrop-filter:blur(22px);
+  border:1px solid var(--glass-border);
+  border-radius:var(--radius);
+  overflow:hidden;
+  opacity:.32;
+  transform:translateY(8px);
+  transition:opacity .5s,transform .5s,border-color .4s,box-shadow .4s;
+}
+.stage-card.active{
+  opacity:1;transform:translateY(0);
+  border-color:var(--c);
+  box-shadow:
+    0 0 0 1px var(--c),
+    0 4px 40px color-mix(in srgb,var(--c) 22%,transparent),
+    inset 0 1px 0 color-mix(in srgb,var(--c) 18%,transparent);
+}
+.stage-card.done{opacity:1;transform:translateY(0);border-color:rgba(34,197,94,.3)}
+
+.stage-hd{
+  display:flex;align-items:center;gap:.7rem;
+  padding:1rem 1.25rem;
+  border-bottom:1px solid rgba(255,255,255,.08);
+  background:rgba(255,255,255,.04);
+}
+.stage-num{
+  font-family:'Space Mono',monospace;
+  font-size:.68rem;font-weight:700;
+  color:var(--c);
+  background:color-mix(in srgb,var(--c) 18%,transparent);
+  border-radius:6px;padding:.15rem .5rem;flex-shrink:0;
+}
+.stage-icon{font-size:1.2rem}
+.stage-title{font-size:1rem;font-weight:700;color:var(--c)}
+.stage-desc{font-size:.76rem;color:var(--muted);margin-left:auto;text-align:right}
+
+.stage-body{padding:1.25rem;min-height:72px}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 1 — LEXICAL
+   ════════════════════════════════════════════════════════════════════════ */
+.tokens-area{display:flex;flex-wrap:wrap;gap:.75rem;align-items:flex-start}
+
+.token-chip{
+  display:flex;flex-direction:column;align-items:center;gap:.22rem;
+  opacity:0;transform:translateY(18px) scale(.88);
+  animation:chip-fly-in .45s cubic-bezier(.34,1.56,.64,1) forwards;
+}
+@keyframes chip-fly-in{to{opacity:1;transform:translateY(0) scale(1)}}
+
+.tok-word{
+  background:var(--lex-dim);
+  border:1px solid rgba(103,232,249,.3);
+  border-radius:8px;padding:.28rem .7rem;
+  font-family:'Space Mono',monospace;
+  font-size:.92rem;font-weight:700;color:var(--lex);
+}
+.tok-pos{
+  font-family:'Space Mono',monospace;
+  font-size:.58rem;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;
+  padding:.12rem .42rem;border-radius:4px;color:#fff;
+}
+/* POS tag colours */
+.pos-NOUN  {background:#0ea5e9}
+.pos-VERB  {background:#7c3aed}
+.pos-MODAL {background:#4f46e5}
+.pos-PRON  {background:#d97706}
+.pos-DET   {background:#475569}
+.pos-ADJ   {background:#059669}
+.pos-ADV   {background:#0891b2}
+.pos-PREP  {background:#64748b}
+.pos-CONJ  {background:#92400e}
+.pos-PUNCT {background:#334155}
+.pos-PROP  {background:#be185d}
+.pos-NUM   {background:#ea580c}
+.pos-Q-WH  {background:#7e22ce}
+.pos-WORD  {background:#3f4e64}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 2 — SYNTACTIC
+   ════════════════════════════════════════════════════════════════════════ */
+.syntax-area{display:flex;flex-direction:column;gap:.9rem}
+
+.sent-type-badge{
+  display:inline-flex;align-items:center;gap:.4rem;
+  padding:.28rem .8rem;border-radius:999px;
+  font-size:.76rem;font-weight:700;
+  background:var(--syn-dim);
+  border:1px solid rgba(196,181,253,.3);
+  color:var(--syn);
+  width:fit-content;
+  opacity:0;animation:fade-in .5s .2s forwards;
+}
+@keyframes fade-in{to{opacity:1}}
+
+.syn-tree{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-start}
+
+.syn-grp{
+  display:flex;flex-direction:column;align-items:center;gap:.22rem;
+  opacity:0;animation:chip-fly-in .4s cubic-bezier(.34,1.56,.64,1) forwards;
+}
+.syn-role{
+  font-size:.61rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--syn);
+  background:var(--syn-dim);padding:.1rem .45rem;border-radius:4px;
+}
+.syn-word{
+  background:rgba(196,181,253,.1);
+  border:1px solid rgba(196,181,253,.25);
+  border-radius:8px;padding:.28rem .6rem;
+  font-family:'Space Mono',monospace;
+  font-size:.9rem;font-weight:600;color:var(--syn);
+}
+.syn-arrow{
+  align-self:center;
+  color:rgba(255,255,255,.25);
+  font-size:1.1rem;
+  opacity:0;animation:fade-in .4s forwards;
+}
+.syn-arc-canvas{
+  width:100%;height:48px;margin-top:.1rem;
+  opacity:0;animation:fade-in .5s .9s forwards;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 3 — SEMANTIC
+   ════════════════════════════════════════════════════════════════════════ */
+.semantic-area{
+  display:flex;flex-wrap:wrap;gap:.45rem;
+  position:relative;align-items:flex-start;
+}
+.sem-tok{
+  padding:.32rem .65rem;border-radius:8px;
+  font-family:'Space Mono',monospace;
+  font-size:.9rem;
+  background:rgba(255,255,255,.06);
+  border:1px solid transparent;
+  color:var(--soft);
+  opacity:0;animation:chip-fly-in .4s cubic-bezier(.34,1.56,.64,1) forwards;
+  transition:background .2s,border-color .2s,transform .2s;
+}
+.sem-tok.key{
+  background:var(--sem-dim);
+  border-color:rgba(110,231,183,.35);
+  color:var(--sem);
+  cursor:pointer;
+  animation:chip-fly-in .4s cubic-bezier(.34,1.56,.64,1) forwards,
+            sem-pulse 2s ease-in-out .6s 3;
+}
+@keyframes sem-pulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(110,231,183,.45)}
+  50%    {box-shadow:0 0 0 7px rgba(110,231,183,0)}
+}
+.sem-tok.key:hover{transform:scale(1.07);background:rgba(110,231,183,.22)}
+
+/* Meaning popup */
+.meaning-popup{
+  position:absolute;
+  background:linear-gradient(150deg,#2D1F5E,#3D2B72);
+  border:1px solid rgba(110,231,183,.4);
+  border-radius:11px;
+  padding:.85rem 1rem;
+  font-size:.8rem;
+  z-index:100;min-width:210px;max-width:290px;
+  box-shadow:0 16px 48px rgba(0,0,0,.55);
+  animation:popup-in .25s cubic-bezier(.34,1.56,.64,1);
+  pointer-events:none;
+}
+@keyframes popup-in{
+  from{opacity:0;transform:scale(.88) translateY(8px)}
+  to  {opacity:1;transform:scale(1) translateY(0)}
+}
+.meaning-popup h4{color:var(--sem);font-size:.83rem;margin-bottom:.5rem}
+.m-entry{display:flex;gap:.4rem;margin-bottom:.3rem;align-items:flex-start}
+.m-sense{
+  background:var(--sem-dim);color:var(--sem);
+  border-radius:4px;padding:.1rem .38rem;
+  font-size:.67rem;font-weight:700;flex-shrink:0;
+}
+.m-def{color:rgba(255,255,255,.6);font-size:.76rem;line-height:1.45}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 4 — DISCOURSE
+   ════════════════════════════════════════════════════════════════════════ */
+.discourse-area{display:flex;flex-direction:column;gap:.9rem}
+.disc-sents{display:flex;flex-direction:column;gap:.5rem}
+.disc-row{
+  display:flex;flex-wrap:wrap;gap:.38rem;
+  opacity:0;animation:fade-in .5s forwards;
+}
+.disc-tok{
+  padding:.25rem .52rem;border-radius:6px;
+  font-family:'Space Mono',monospace;
+  font-size:.88rem;
+  background:rgba(255,255,255,.06);
+  border:1px solid transparent;
+  color:var(--soft);
+  transition:all .2s;
+}
+.disc-tok.pronoun{
+  background:var(--dis-dim);
+  border-color:rgba(252,211,77,.4);
+  color:var(--dis);font-weight:700;
+}
+.disc-tok.referent{
+  background:rgba(252,211,77,.08);
+  border-color:rgba(252,211,77,.28);
+  color:var(--dis);
+}
+.disc-svg{
+  width:100%;overflow:visible;pointer-events:none;
+}
+.coref-path{
+  fill:none;stroke:var(--dis);stroke-width:1.8;
+  stroke-dasharray:220;stroke-dashoffset:220;
+  animation:draw-dash .9s ease forwards;
+  marker-end:url(#arr);
+}
+@keyframes draw-dash{to{stroke-dashoffset:0}}
+.coref-lbl{
+  font-size:.63rem;fill:var(--dis);
+  font-family:'Space Mono',monospace;
+  opacity:0;animation:fade-in .4s .9s forwards;
+}
+.no-coref{
+  font-size:.82rem;color:var(--muted);
+  font-style:italic;padding:.4rem 0;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 5 — PRAGMATIC
+   ════════════════════════════════════════════════════════════════════════ */
+.pragmatic-area{display:flex;gap:1rem;flex-wrap:wrap}
+
+.prag-card{
+  flex:1 1 220px;
+  background:rgba(255,255,255,.07);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:11px;padding:1rem;
+  opacity:0;transform:translateY(12px);
+  animation:card-rise .5s cubic-bezier(.34,1.56,.64,1) forwards;
+}
+.prag-card:nth-child(2){animation-delay:.15s;border-color:rgba(249,168,212,.2)}
+@keyframes card-rise{to{opacity:1;transform:translateY(0)}}
+
+.prag-title{
+  font-size:.7rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--prag);margin-bottom:.5rem;
+}
+.speech-act-pill{
+  display:inline-flex;align-items:center;gap:.3rem;
+  padding:.18rem .6rem;border-radius:999px;
+  font-size:.7rem;font-weight:700;
+  background:var(--prag-dim);
+  border:1px solid rgba(249,168,212,.3);
+  color:var(--prag);margin-bottom:.6rem;
+}
+.prag-card p{font-size:.86rem;color:var(--soft);line-height:1.55}
+
+.conf-bar{margin-top:.7rem}
+.conf-meta{
+  display:flex;justify-content:space-between;
+  font-size:.7rem;color:var(--muted);margin-bottom:.28rem;
+}
+.conf-track{
+  height:4px;background:rgba(255,255,255,.1);
+  border-radius:2px;overflow:hidden;
+}
+.conf-fill{
+  height:100%;width:0%;
+  background:linear-gradient(90deg,var(--prag),#a855f7);
+  transition:width 1.1s var(--ease) .5s;
+  border-radius:2px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STEP CONTROLS
+   ════════════════════════════════════════════════════════════════════════ */
+.step-controls{
+  display:flex;align-items:center;gap:.75rem;
+  margin-top:1.5rem;justify-content:center;flex-wrap:wrap;
+}
+.step-info{
+  font-size:.8rem;color:var(--muted);
+  font-family:'Space Mono',monospace;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PAUSE & THINK MODAL
+   ════════════════════════════════════════════════════════════════════════ */
+.modal-overlay{
+  position:fixed;inset:0;
+  background:rgba(20,10,45,.78);
+  backdrop-filter:blur(8px);
+  z-index:200;
+  display:flex;align-items:center;justify-content:center;
+  opacity:0;pointer-events:none;
+  transition:opacity .35s;
+}
+.modal-overlay.open{opacity:1;pointer-events:all}
+
+.modal{
+  background:linear-gradient(145deg,#2C1B5E,#3E2878);
+  border:1px solid rgba(249,168,212,.3);
+  border-radius:18px;
+  padding:2rem;max-width:460px;width:90%;
+  box-shadow:0 24px 64px rgba(0,0,0,.7);
+  transform:scale(.9) translateY(20px);
+  transition:transform .35s cubic-bezier(.34,1.56,.64,1);
+}
+.modal-overlay.open .modal{transform:scale(1) translateY(0)}
+.modal h2{font-size:1.35rem;color:var(--prag);margin-bottom:.45rem}
+.modal p{color:var(--soft);font-size:.9rem;margin-bottom:1rem}
+.modal textarea{
+  width:100%;background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:9px;color:var(--text);
+  padding:.72rem 1rem;font-size:.9rem;
+  resize:vertical;min-height:80px;
+  outline:none;margin-bottom:1rem;
+  transition:border-color .2s;
+}
+.modal textarea:focus{border-color:var(--prag)}
+.modal-actions{display:flex;gap:.6rem;justify-content:flex-end}
+
+/* ════════════════════════════════════════════════════════════════════════
+   TOOLTIP
+   ════════════════════════════════════════════════════════════════════════ */
+[data-tip]{position:relative}
+[data-tip]::after{
+  content:attr(data-tip);
+  position:absolute;bottom:calc(100% + 7px);left:50%;
+  transform:translateX(-50%);
+  background:rgba(30,15,60,.95);
+  color:var(--text);border:1px solid var(--glass-border);
+  border-radius:6px;padding:.28rem .6rem;
+  font-size:.7rem;white-space:nowrap;
+  pointer-events:none;opacity:0;
+  transition:opacity .2s;z-index:50;
+}
+[data-tip]:hover::after{opacity:1}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ════════════════════════════════════════════════════════════════════════ */
+@media(max-width:640px){
+  .pragmatic-area{flex-direction:column}
+  .stage-desc{display:none}
+  .input-row{flex-direction:column}
+}
+</style>
+</head>
+<body>
+
+<!-- ══ Particle background canvas ═══════════════════════════════════════ -->
+<canvas id="bg-canvas"></canvas>
+
+<!-- ══ Pause & Think Modal ══════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <h2>⏸ Pause &amp; Think</h2>
+    <p>Before seeing the pragmatic analysis, what do <em>you</em> think this sentence truly means?</p>
+    <textarea id="student-answer" placeholder="Write your interpretation here…"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="modal-skip">Skip</button>
+      <button class="btn btn-primary" id="modal-ok">Reveal Analysis →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ App ══════════════════════════════════════════════════════════════ -->
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="header-badge">⚗️ NLP Visualization Lab</div>
+    <h1>Watch Language Being Processed</h1>
+    <p>Powered by <strong>spaCy</strong> + <strong>NLTK WordNet</strong> — real NLP, no hardcoding.</p>
+    <!-- Backend server status bar -->
+    <!-- <div class="server-bar">
+      <div class="srv-dot" id="srv-dot"></div>
+      <span id="srv-label">Checking backend…</span>
+      <input id="srv-url-input" type="text" value="http://localhost:5000" spellcheck="false" />
+      <button id="btn-ping">Ping</button>
+    </div> -->
+  </header>
+
+  <!-- Input Panel -->
+  <div class="input-panel glass">
+    <div class="input-row">
+      <div class="input-group">
+        <label for="sentence-input">Your Sentence (supports multiple sentences)</label>
+        <textarea id="sentence-input" rows="2" placeholder="e.g. Can you open the window?">Can you open the window?</textarea>
+      </div>
+      <div class="controls">
+        <select id="example-select">
+          <option value="">— Try an example —</option>
+          <option value="Can you open the window?">🪟  Window request</option>
+          <option value="Riya dropped the glass. It broke.">💧  Coreference demo</option>
+          <option value="It is very hot here.">🌡️  Implicit request</option>
+        </select>
+        <button class="btn btn-primary" id="btn-process" data-tip="Run full auto-animation">▶ Process</button>
+        <button class="btn btn-secondary" id="btn-next" disabled data-tip="Advance one stage (step mode)">Step →</button>
+        <button class="btn btn-danger" id="btn-reset" data-tip="Reset everything">↺ Reset</button>
+      </div>
+    </div>
+    <div class="mode-row">
+      <div class="toggle-wrap" id="mode-toggle-wrap">
+        <div class="toggle-track" id="toggle-track"><div class="toggle-knob"></div></div>
+        <span class="toggle-label">Step-by-step mode</span>
+      </div>
+      <span id="mode-hint">Auto mode: all stages animate with 1.5 s pauses</span>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-wrap">
+    <div class="progress-meta">
+      <span id="prog-text">Ready</span>
+      <span id="prog-pct">0 %</span>
+    </div>
+    <div class="progress-track">
+      <div class="progress-fill" id="prog-fill"></div>
+    </div>
+  </div>
+
+  <!-- Pipeline bar -->
+  <div class="pipeline-bar" id="pipeline-bar"></div>
+
+  <!-- Stage cards -->
+  <div class="stages-wrap" id="stages-wrap"></div>
+
+  <!-- Step-mode controls (hidden by default) -->
+  <div class="step-controls" id="step-controls" style="display:none">
+    <span class="step-info" id="step-info">Stage 0 / 5</span>
+    <button class="btn btn-primary" id="btn-next-btm">Next Stage →</button>
+  </div>
+
+</div><!-- /.app -->
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     JAVASCRIPT  —  API Client + Rendering Engine
+     All NLP is done by the Python backend (spaCy + NLTK).
+     This file only handles UI, animations, and visualisation.
+══════════════════════════════════════════════════════════════════════════ -->
+<script>
+/* ════════════════════════════════════════════════════════════════════════
+   CONFIGURATION
+   ════════════════════════════════════════════════════════════════════════ */
+const STAGES = [
+  {id:'lexical',   label:'Lexical',   icon:'🔤', color:'var(--lex)',  desc:'Tokenisation & POS tagging'},
+  {id:'syntactic', label:'Syntactic', icon:'🌲', color:'var(--syn)',  desc:'Dependency parse & roles'},
+  {id:'semantic',  label:'Semantic',  icon:'💡', color:'var(--sem)',  desc:'WordNet meanings & entities'},
+  {id:'discourse', label:'Discourse', icon:'🔗', color:'var(--dis)',  desc:'Cross-sentence coreference'},
+  {id:'pragmatic', label:'Pragmatic', icon:'🎯', color:'var(--prag)', desc:'Speech act & intent'},
+];
+
+/* Default backend URL — user can override in the server bar */
+let API_BASE = 'http://localhost:5000';
+
+/* ════════════════════════════════════════════════════════════════════════
+   BACKEND API CALLS
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** Ping the Flask backend — updates the server-status bar */
+async function pingBackend() {
+  const dot   = document.getElementById('srv-dot');
+  const label = document.getElementById('srv-label');
+  API_BASE = document.getElementById('srv-url-input').value.trim().replace(/\/$/, '');
+  dot.className   = 'srv-dot';
+  label.textContent = 'Checking backend…';
+  try {
+    const res  = await fetch(`${API_BASE}/api/health`, {signal: AbortSignal.timeout(4000)});
+    const data = await res.json();
+    dot.className   = 'srv-dot ok';
+    label.textContent =
+      `✅ Backend online — spaCy ${data.model} | coref: ${data.coref} | NLTK WordNet: ${data.nltk_wn}`;
+    document.getElementById('btn-process').disabled = false;
+  } catch (err) {
+    dot.className   = 'srv-dot err';
+    label.textContent =
+      '❌ Backend offline — run:  cd backend && python app.py';
+    document.getElementById('btn-process').disabled = true;
+  }
+}
+
+/**
+ * POST the input text to the Flask backend.
+ * spaCy + NLTK process it server-side; we just render the result.
+ */
+async function fetchAnalysis(text) {
+  const res = await fetch(`${API_BASE}/api/analyze`, {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify({text}),
+    signal:  AbortSignal.timeout(15000),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return mapApiResponse(await res.json());
+}
+
+/**
+ * Normalise Flask response  →  internal analysisData shape
+ * used by all rendering functions.
+ */
+function mapApiResponse(api) {
+  const sentences = (api.sentences || []).map(s => ({
+    text:  s.text,
+    terms: (s.tokens || []).map(t => ({
+      text:     t.text,
+      normal:   t.lemma || t.text.toLowerCase(),
+      pos:      t.pos,
+      dep:      t.dep,
+      dep_role: t.dep_role,
+      ent_type: t.ent_type || null,
+      is_stop:  t.is_stop,
+      is_punct: t.is_punct,
+    })),
+  }));
+  return {
+    sentences,
+    get firstSent() { return this.sentences[0] || {text:'', terms:[]}; },
+    sentType:     api.sent_type    || 'Statement',
+    roles:        api.roles        || [],
+    chains:       api.coref_chains || [],
+    prag:         api.pragmatic    || {},
+    entities:     api.entities     || [],
+    wordMeanings: api.word_meanings || {},
+    modelInfo:    api.model_info   || {},
+  };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   POS LABEL HELPERS
+   ════════════════════════════════════════════════════════════════════════ */
+function posFullName(p) {
+  return ({
+    NOUN:'Noun', VERB:'Verb', MODAL:'Modal verb', AUX:'Auxiliary verb',
+    PRON:'Pronoun', DET:'Determiner', ADJ:'Adjective', ADV:'Adverb',
+    PREP:'Preposition', CONJ:'Conjunction', PUNCT:'Punctuation',
+    PROP:'Proper noun', NUM:'Number', 'Q-WH':'Question word',
+    PART:'Particle', INTJ:'Interjection', WORD:'Unknown',
+  })[p] || p;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   DOM BUILDERS
+   ════════════════════════════════════════════════════════════════════════ */
+function buildPipeline() {
+  const bar = document.getElementById('pipeline-bar');
+  bar.innerHTML = '';
+  bar.appendChild(makeNode('➡','Input','rgba(255,255,255,.45)'));
+  STAGES.forEach((s, i) => {
+    bar.appendChild(makeConnector(i));
+    const node = makeNode(s.icon, s.label, s.color);
+    node.id = `pnode-${i}`;
+    bar.appendChild(node);
+  });
+  bar.appendChild(makeConnector(5));
+  bar.appendChild(makeNode('✓','Output','rgba(255,255,255,.45)'));
+}
+
+function makeNode(icon, label, color) {
+  const n = document.createElement('div');
+  n.className = 'pipe-node';
+  n.innerHTML = `
+    <div class="pipe-dot" style="--sc:${color}">
+      ${icon}<span class="chk">✓</span>
+    </div>
+    <span class="pipe-lbl">${label}</span>`;
+  return n;
+}
+
+function makeConnector(i) {
+  const colors = ['var(--lex)','var(--syn)','var(--sem)','var(--dis)','var(--prag)',
+                  'rgba(255,255,255,.3)','rgba(255,255,255,.3)'];
+  const c = document.createElement('div');
+  c.className = 'pipe-connector';
+  c.id = `pconn-${i}`;
+  c.innerHTML = '<div class="pipe-conn-fill" style="background:' +
+                (colors[i]||'rgba(255,255,255,.3)') + '"></div>';
+  return c;
+}
+
+function buildStageCards() {
+  const wrap = document.getElementById('stages-wrap');
+  wrap.innerHTML = '';
+  STAGES.forEach((s, i) => {
+    const card = document.createElement('div');
+    card.className = 'stage-card';
+    card.id = `scard-${i}`;
+    card.style.setProperty('--c', s.color);
+    card.innerHTML = `
+      <div class="stage-hd">
+        <span class="stage-num">0${i+1}</span>
+        <span class="stage-icon">${s.icon}</span>
+        <span class="stage-title">${s.label} Analysis</span>
+        <span class="stage-desc">${s.desc}</span>
+      </div>
+      <div class="stage-body" id="sbody-${i}">
+        <span style="color:var(--muted);font-size:.84rem">Waiting…</span>
+      </div>`;
+    wrap.appendChild(card);
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PIPELINE HELPERS
+   ════════════════════════════════════════════════════════════════════════ */
+function activatePipeNode(i) {
+  document.querySelectorAll('.pipe-node').forEach((n, idx) => {
+    n.classList.remove('active');
+    if (idx === i+1) { n.classList.add('active'); n.style.setProperty('--sc', STAGES[i].color); }
+  });
+  for (let k=0; k<=i; k++) document.getElementById(`pconn-${k}`)?.classList.add('lit');
+}
+function completePipeNode(i) {
+  document.getElementById(`pnode-${i}`)?.classList.remove('active');
+  document.getElementById(`pnode-${i}`)?.querySelector('.pipe-dot')?.classList.add('done');
+  document.getElementById(`pconn-${i+1}`)?.classList.add('lit');
+}
+function activateCard(i) {
+  document.querySelectorAll('.stage-card').forEach((c, idx) => {
+    c.classList.remove('active');
+    if (idx === i) c.classList.add('active');
+  });
+  document.getElementById(`scard-${i}`)?.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+function completeCard(i) {
+  const c = document.getElementById(`scard-${i}`);
+  if (c) { c.classList.remove('active'); c.classList.add('done'); }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PROGRESS BAR
+   ════════════════════════════════════════════════════════════════════════ */
+function setProgress(i) {
+  const pct = Math.round(((i+1)/STAGES.length)*100);
+  document.getElementById('prog-fill').style.width  = pct+'%';
+  document.getElementById('prog-pct').textContent   = pct+' %';
+  document.getElementById('prog-text').textContent  =
+    i >= 0 ? `Processing: ${STAGES[i].label} Analysis` : 'Ready';
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 1 — LEXICAL
+   Source: spaCy tokeniser + POS tagger + NER
+   ════════════════════════════════════════════════════════════════════════ */
+function renderLexical(body, data) {
+  const area = document.createElement('div');
+  area.className = 'tokens-area';
+
+  data.sentences.flatMap(s => s.terms).forEach((t, i) => {
+    if (!t.text.trim() || t.is_punct) return;
+    const chip = document.createElement('div');
+    chip.className = 'token-chip';
+    chip.style.animationDelay = `${i * 0.07}s`;
+    const posLabel = t.pos || 'WORD';
+    chip.innerHTML = `
+      <div class="tok-word">${esc(t.text)}</div>
+      <span class="tok-pos pos-${posLabel}"
+            data-tip="${posFullName(posLabel)} · lemma: ${esc(t.normal)}">${posLabel}</span>`;
+    area.appendChild(chip);
+  });
+
+  /* Named Entities row */
+  if (data.entities && data.entities.length) {
+    const lbl = document.createElement('div');
+    lbl.style.cssText = 'font-size:.7rem;color:var(--muted);margin-top:.8rem;width:100%';
+    lbl.textContent   = '🏷 Named Entities (spaCy NER):';
+    area.appendChild(lbl);
+    const chips = document.createElement('div');
+    chips.className = 'info-chips';
+    chips.style.width = '100%';
+    data.entities.forEach(e => {
+      const c = document.createElement('span');
+      c.className = 'info-chip ner';
+      c.textContent = `${e.text}  ·  ${e.label}`;
+      c.setAttribute('data-tip', e.description);
+      chips.appendChild(c);
+    });
+    area.appendChild(chips);
+  }
+
+  body.innerHTML = '';
+  body.appendChild(area);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 2 — SYNTACTIC
+   Source: spaCy dependency parser (nsubj, ROOT, dobj …)
+   ════════════════════════════════════════════════════════════════════════ */
+function renderSyntactic(body, data) {
+  body.innerHTML = '';
+  const area = document.createElement('div');
+  area.className = 'syntax-area';
+
+  const badge = document.createElement('div');
+  badge.className = 'sent-type-badge';
+  badge.innerHTML = `🏷 Sentence type: <strong>${data.sentType}</strong>`;
+  area.appendChild(badge);
+
+  const tree = document.createElement('div');
+  tree.className = 'syn-tree';
+
+  data.roles.forEach((r, i) => {
+    if (i > 0) {
+      const arr = document.createElement('span');
+      arr.className = 'syn-arrow';
+      arr.style.animationDelay = `${i*0.1+0.3}s`;
+      arr.textContent = '→';
+      tree.appendChild(arr);
+    }
+    const grp = document.createElement('div');
+    grp.className = 'syn-grp';
+    grp.style.animationDelay = `${i*0.1+0.15}s`;
+    grp.innerHTML = `
+      <span class="syn-role" data-tip="spaCy dep label: ${r.dep}">${r.role}</span>
+      <span class="syn-word">${esc(r.word)}</span>`;
+    tree.appendChild(grp);
+  });
+  area.appendChild(tree);
+
+  const cv = document.createElement('canvas');
+  cv.className = 'syn-arc-canvas';
+  cv.height = 48;
+  area.appendChild(cv);
+  body.appendChild(area);
+  requestAnimationFrame(() => drawArcs(cv, tree));
+}
+
+function drawArcs(canvas, tree) {
+  const groups = tree.querySelectorAll('.syn-grp');
+  if (groups.length < 2) return;
+  canvas.width = canvas.parentElement.offsetWidth || 600;
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = 'rgba(196,181,253,0.4)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4,4]);
+  const cRect = canvas.getBoundingClientRect();
+  groups.forEach((g, i) => {
+    if (!i) return;
+    const r1 = groups[i-1].getBoundingClientRect();
+    const r2 = g.getBoundingClientRect();
+    const x1 = r1.left + r1.width/2 - cRect.left;
+    const x2 = r2.left + r2.width/2 - cRect.left;
+    ctx.beginPath();
+    ctx.moveTo(x1, 6);
+    ctx.quadraticCurveTo((x1+x2)/2, 36, x2, 6);
+    ctx.stroke();
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 3 — SEMANTIC
+   Source: NLTK WordNet (real dictionary definitions per word sense)
+   ════════════════════════════════════════════════════════════════════════ */
+function renderSemantic(body, data) {
+  body.innerHTML = '';
+  const area = document.createElement('div');
+  area.className = 'semantic-area';
+  area.id = 'semArea';
+  let popup = null;
+
+  const keyPos = new Set(['NOUN','VERB','ADJ','PROP','AUX']);
+
+  data.sentences.flatMap(s => s.terms).forEach((t, i) => {
+    if (!t.text.trim()) return;
+    const span = document.createElement('span');
+    span.className = 'sem-tok';
+    span.style.animationDelay = `${i * 0.06}s`;
+
+    const defs   = data.wordMeanings[t.normal];
+    const hasWN  = defs && defs.length > 0;
+    const isKey  = keyPos.has(t.pos) && !t.is_stop && hasWN;
+
+    if (isKey) {
+      span.classList.add('key');
+      span.setAttribute('data-tip', 'Hover — WordNet definitions');
+      span.addEventListener('mouseenter', e => {
+        if (popup) { popup.remove(); popup = null; }
+        popup = buildMeaningPopup(t.text, defs);
+        positionPopup(popup, e.target, area);
+        area.appendChild(popup);
+      });
+      span.addEventListener('mouseleave', () => {
+        if (popup) { popup.remove(); popup = null; }
+      });
+    } else if (t.ent_type) {
+      span.style.cssText +=
+        ';background:var(--dis-dim);border-color:rgba(252,211,77,.3);color:var(--dis)';
+      span.setAttribute('data-tip', `NER entity: ${t.ent_type}`);
+    }
+    span.textContent = t.text;
+    area.appendChild(span);
+  });
+
+  const nDefs = Object.keys(data.wordMeanings).length;
+  const note  = document.createElement('div');
+  note.style.cssText = 'width:100%;margin-top:.75rem;font-size:.72rem;color:var(--muted)';
+  note.textContent   = nDefs
+    ? `💡 ${nDefs} word${nDefs > 1 ? 's' : ''} found in NLTK WordNet (hover to read definitions)`
+    : '💡 No WordNet definitions found for tokens in this sentence.';
+  area.appendChild(note);
+
+  body.innerHTML = '';
+  body.appendChild(area);
+}
+
+function buildMeaningPopup(word, defs) {
+  const p = document.createElement('div');
+  p.className = 'meaning-popup';
+  p.innerHTML =
+    `<h4>💡 "${esc(word)}"  <small style="font-weight:400;color:var(--muted)">NLTK WordNet</small></h4>` +
+    defs.map(d => `
+      <div class="m-entry">
+        <span class="m-sense">${esc(d.sense)}</span>
+        <span class="m-def">${esc(d.def)}</span>
+      </div>`).join('');
+  return p;
+}
+
+function positionPopup(popup, target, container) {
+  container.style.position = 'relative';
+  const tRect = target.getBoundingClientRect();
+  const cRect = container.getBoundingClientRect();
+  popup.style.top  = `${tRect.top  - cRect.top  - 8}px`;
+  popup.style.left = `${Math.max(0, tRect.left - cRect.left)}px`;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 4 — DISCOURSE
+   Source: coreferee (neural) or heuristic fallback in backend
+   ════════════════════════════════════════════════════════════════════════ */
+function renderDiscourse(body, data) {
+  body.innerHTML = '';
+  const area      = document.createElement('div');
+  area.className  = 'discourse-area';
+  const PRONS = new Set([
+    'it','he','she','they','this','that','these','those','him','her','them'
+  ]);
+
+  const sentWrap      = document.createElement('div');
+  sentWrap.className  = 'disc-sents';
+
+  data.sentences.forEach((sent, si) => {
+    const row     = document.createElement('div');
+    row.className = 'disc-row';
+    row.style.animationDelay = `${si * 0.18}s`;
+    sent.terms.forEach((t, wi) => {
+      if (!t.text.trim()) return;
+      const span  = document.createElement('span');
+      span.className = 'disc-tok';
+      span.id        = `dtok-${si}-${wi}`;
+      if (t.pos === 'PRON' && PRONS.has(t.normal)) span.classList.add('pronoun');
+      data.chains.forEach(ch => {
+        if (ch.antecedent.si === si && ch.antecedent.wi === wi)
+          span.classList.add('referent');
+      });
+      span.textContent = t.text;
+      row.appendChild(span);
+    });
+    sentWrap.appendChild(row);
+  });
+  area.appendChild(sentWrap);
+
+  /* SVG arrows */
+  const svg       = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.className   = 'disc-svg';
+  svg.setAttribute('height','64');
+  svg.innerHTML   = `<defs>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="var(--dis)" opacity=".85"/>
+    </marker></defs>`;
+  area.appendChild(svg);
+
+  const badge     = document.createElement('div');
+  badge.style.cssText = 'font-size:.72rem;color:var(--muted);margin-top:.45rem';
+  badge.textContent   = `Coreference engine: ${data.modelInfo.coref || 'heuristic'}`;
+  area.appendChild(badge);
+
+  body.appendChild(area);
+  setTimeout(() => drawCorefArrows(svg, data.chains), 450);
+}
+
+function drawCorefArrows(svg, chains) {
+  const W = svg.parentElement?.offsetWidth || 600;
+  svg.setAttribute('width', W);
+  if (!chains.length) {
+    svg.innerHTML +=
+      '<text x="12" y="36" fill="rgba(255,255,255,.35)" font-size="12" ' +
+      'font-family="Space Mono,monospace">No cross-sentence coreference detected.</text>';
+    return;
+  }
+  chains.forEach((ch, ci) => {
+    const pEl = document.getElementById(`dtok-${ch.pronoun.si}-${ch.pronoun.wi}`);
+    const aEl = document.getElementById(`dtok-${ch.antecedent.si}-${ch.antecedent.wi}`);
+    if (!pEl || !aEl) return;
+    const sRect = svg.getBoundingClientRect();
+    const pRect = pEl.getBoundingClientRect();
+    const aRect = aEl.getBoundingClientRect();
+    const x1 = aRect.left + aRect.width/2 - sRect.left;
+    const x2 = pRect.left + pRect.width/2 - sRect.left;
+    const cy = 20 + ci * 18;
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', `M${x1},5 C${x1},${cy} ${x2},${cy} ${x2},5`);
+    path.setAttribute('class','coref-path');
+    path.style.animationDelay = `${ci * 0.3}s`;
+    svg.appendChild(path);
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg','text');
+    lbl.setAttribute('x', String((x1+x2)/2 - 20));
+    lbl.setAttribute('y', String(cy+16));
+    lbl.setAttribute('class','coref-lbl');
+    lbl.textContent = `"${ch.pronoun.word}" → "${ch.antecedent.word}"`;
+    svg.appendChild(lbl);
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   STAGE 5 — PRAGMATIC
+   Source: spaCy dependency parse + structural rules in backend
+   ════════════════════════════════════════════════════════════════════════ */
+function renderPragmatic(body, data) {
+  body.innerHTML = '';
+  const area    = document.createElement('div');
+  area.className = 'pragmatic-area';
+  const { prag } = data;
+
+  const c1 = document.createElement('div');
+  c1.className = 'prag-card';
+  c1.innerHTML = `
+    <div class="prag-title">📖 Literal Meaning</div>
+    <div class="speech-act-pill">${prag.icon} ${prag.speechAct}</div>
+    <p>${prag.literal}</p>`;
+
+  const c2 = document.createElement('div');
+  c2.className = 'prag-card';
+  c2.innerHTML = `
+    <div class="prag-title">🎯 Intended Meaning</div>
+    <p>${prag.intended}</p>
+    <div class="conf-bar">
+      <div class="conf-meta">
+        <span>Intent confidence (spaCy parse)</span>
+        <span>${prag.confidence}%</span>
+      </div>
+      <div class="conf-track"><div class="conf-fill" id="confFill"></div></div>
+    </div>`;
+
+  area.appendChild(c1);
+  area.appendChild(c2);
+  body.appendChild(area);
+  requestAnimationFrame(() =>
+    setTimeout(() => {
+      const f = document.getElementById('confFill');
+      if (f) f.style.width = prag.confidence + '%';
+    }, 120)
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PIPELINE ENGINE
+   ════════════════════════════════════════════════════════════════════════ */
+let currentStage = -1;
+let isRunning    = false;
+let stepMode     = false;
+let analysisData = null;
+
+async function processInput() {
+  const raw = document.getElementById('sentence-input').value.trim();
+  if (!raw) return;
+
+  reset(false);
+  isRunning = true;
+  toggleProcessBtn(false);
+
+  try {
+    document.getElementById('prog-text').textContent = 'Calling backend (spaCy + NLTK)…';
+    analysisData = await fetchAnalysis(raw);
+  } catch (err) {
+    document.getElementById('prog-text').textContent = `⚠ Backend error: ${err.message}`;
+    isRunning = false;
+    toggleProcessBtn(true);
+    return;
+  }
+
+  if (stepMode) {
+    currentStage = -1;
+    document.getElementById('step-controls').style.display = 'flex';
+    updateStepInfo();
+    document.getElementById('btn-next').disabled     = false;
+    document.getElementById('btn-next-btm').disabled = false;
+    isRunning = false;
+  } else {
+    for (let i = 0; i < STAGES.length; i++) {
+      await runStage(i);
+      await sleep(1550);
+      completeCard(i);
+      completePipeNode(i);
+    }
+    document.getElementById('prog-text').textContent = '✓ Complete!';
+    document.getElementById('prog-pct').textContent  = '100 %';
+    document.getElementById('prog-fill').style.width = '100%';
+    isRunning = false;
+    toggleProcessBtn(true);
+  }
+}
+
+async function runStage(i) {
+  if (i === 4) await openModal();
+  currentStage = i;
+  setProgress(i);
+  activatePipeNode(i);
+  activateCard(i);
+  const body = document.getElementById(`sbody-${i}`);
+  body.innerHTML =
+    '<span style="color:var(--muted);font-size:.84rem;animation:fade-in .3s both">Analyzing…</span>';
+  await sleep(380);
+  switch (i) {
+    case 0: renderLexical(body,   analysisData); break;
+    case 1: renderSyntactic(body, analysisData); break;
+    case 2: renderSemantic(body,  analysisData); break;
+    case 3: renderDiscourse(body, analysisData); break;
+    case 4: renderPragmatic(body, analysisData); break;
+  }
+}
+
+async function stepForward() {
+  if (currentStage >= STAGES.length - 1) return;
+  if (currentStage >= 0) { completeCard(currentStage); completePipeNode(currentStage); }
+  await runStage(currentStage + 1);
+  updateStepInfo();
+  if (currentStage >= STAGES.length - 1) {
+    document.getElementById('btn-next').disabled     = true;
+    document.getElementById('btn-next-btm').disabled = true;
+    document.getElementById('prog-text').textContent = '✓ Complete!';
+    document.getElementById('prog-pct').textContent  = '100 %';
+    document.getElementById('prog-fill').style.width = '100%';
+  }
+}
+
+function updateStepInfo() {
+  document.getElementById('step-info').textContent =
+    `Stage ${Math.max(currentStage, 0)} / ${STAGES.length}`;
+}
+
+function openModal() {
+  return new Promise(res => {
+    const ov = document.getElementById('modal-overlay');
+    ov.classList.add('open');
+    const close = () => { ov.classList.remove('open'); res(); };
+    document.getElementById('modal-ok').onclick   = close;
+    document.getElementById('modal-skip').onclick = close;
+  });
+}
+
+function reset(clearText = true) {
+  currentStage = -1; isRunning = false; analysisData = null;
+  if (clearText) document.getElementById('sentence-input').value = '';
+  toggleProcessBtn(true);
+  document.getElementById('btn-next').disabled     = true;
+  document.getElementById('btn-next-btm').disabled = true;
+  document.getElementById('step-controls').style.display = 'none';
+  document.getElementById('prog-fill').style.width = '0%';
+  document.getElementById('prog-pct').textContent  = '0 %';
+  document.getElementById('prog-text').textContent = 'Ready';
+  buildPipeline();
+  buildStageCards();
+}
+
+function toggleProcessBtn(on) {
+  const offline = document.getElementById('srv-dot').classList.contains('err');
+  document.getElementById('btn-process').disabled = !on || offline;
+}
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc   = s  => String(s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+/* ════════════════════════════════════════════════════════════════════════
+   BACKGROUND PARTICLES
+   ════════════════════════════════════════════════════════════════════════ */
+function initParticles() {
+  const cv  = document.getElementById('bg-canvas');
+  const ctx = cv.getContext('2d');
+  let W, H, pts;
+  const resize = () => {
+    W = cv.width  = window.innerWidth;
+    H = cv.height = window.innerHeight;
+    pts = Array.from({length: Math.floor(W * H / 16000)}, () => ({
+      x:   Math.random() * W,  y:   Math.random() * H,
+      r:   Math.random() * 1.6 + 0.3,
+      vx:  (Math.random() - .5) * .28, vy: (Math.random() - .5) * .28,
+      a:   Math.random() * .4 + .1,
+      col: ['#67E8F9','#C4B5FD','#6EE7B7','#FCD34D','#F9A8D4'][Math.floor(Math.random()*5)],
+    }));
+  };
+  const draw = () => {
+    ctx.clearRect(0, 0, W, H);
+    pts.forEach(p => {
+      p.x = (p.x + p.vx + W) % W;  p.y = (p.y + p.vy + H) % H;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fillStyle = p.col; ctx.globalAlpha = p.a; ctx.fill();
+    });
+    ctx.lineWidth = .5;
+    for (let i = 0; i < pts.length; i++)
+      for (let j = i+1; j < pts.length; j++) {
+        const dx = pts[i].x-pts[j].x, dy = pts[i].y-pts[j].y;
+        const d  = Math.sqrt(dx*dx+dy*dy);
+        if (d < 90) {
+          ctx.beginPath(); ctx.moveTo(pts[i].x,pts[i].y); ctx.lineTo(pts[j].x,pts[j].y);
+          ctx.strokeStyle = pts[i].col; ctx.globalAlpha = (1-d/90)*.1; ctx.stroke();
+        }
+      }
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(draw);
+  };
+  resize(); draw();
+  window.addEventListener('resize', resize);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   INIT
+   ════════════════════════════════════════════════════════════════════════ */
+document.addEventListener('DOMContentLoaded', () => {
+  buildPipeline();
+  buildStageCards();
+  initParticles();
+  pingBackend();   /* auto-check if Flask is running */
+
+  document.getElementById('btn-process').addEventListener('click', () => {
+    if (!isRunning) processInput();
+  });
+  document.getElementById('btn-reset').addEventListener('click', () => reset(true));
+  document.getElementById('btn-ping').addEventListener('click', pingBackend);
+
+  const stepFn = () => { if (!isRunning) stepForward(); };
+  document.getElementById('btn-next').addEventListener('click',     stepFn);
+  document.getElementById('btn-next-btm').addEventListener('click', stepFn);
+
+  document.getElementById('example-select').addEventListener('change', e => {
+    if (e.target.value) {
+      document.getElementById('sentence-input').value = e.target.value;
+      e.target.value = '';
+    }
+  });
+
+  document.getElementById('mode-toggle-wrap').addEventListener('click', () => {
+    stepMode = !stepMode;
+    document.getElementById('toggle-track').classList.toggle('on', stepMode);
+    document.getElementById('mode-hint').textContent = stepMode
+      ? 'Step mode: click "Step →" or "Next Stage" to advance manually'
+      : 'Auto mode: all stages animate with 1.5 s pauses';
+    if (!stepMode) document.getElementById('btn-next').disabled = true;
+  });
+
+  document.getElementById('sentence-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!isRunning) processInput();
+    }
+  });
+});
+</script>
+</body>
+</html>
