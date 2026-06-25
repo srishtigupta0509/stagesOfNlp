@@ -3,9 +3,20 @@ flask-cors>=4.0.0
 spacy
 nltk>=3.8.1
 
-# After installing, run these commands once:
-#   python -m spacy download en_core_web_sm
+# ── spaCy language models (install at least one) ───────────────────────────
+# The backend tries each model in order: trf → lg → md → sm
 #
-# Optional (neural coreference):
+# Best accuracy — transformer-based (~500 MB, GPU recommended):
+#   python -m spacy download en_core_web_trf
+#
+# Good accuracy — large vectors (~750 MB, fast on CPU):
+#   python -m spacy download en_core_web_lg
+#
+# Minimum / fallback (~12 MB):
+#   python -m spacy download en_core_web_sm
+
+# ── Optional: neural coreference resolution ────────────────────────────────
+# Significantly improves Stage 4 (Discourse) for multi-sentence inputs.
+# coreferee only works with sm / md / lg (not trf).
 #   pip install coreferee
 #   python -m coreferee install en

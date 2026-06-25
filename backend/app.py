@@ -2,17 +2,30 @@
 NLP Visualization Lab — Python Backend
 =======================================
 Libraries used:
-  • spaCy  (en_core_web_sm) — tokenisation, POS tagging, dependency parsing,
-                              lemmatisation, named-entity recognition (NER)
+  • spaCy  (en_core_web_trf / lg / sm) — tokenisation, POS tagging, dependency
+                              parsing, lemmatisation, named-entity recognition
   • NLTK   (WordNet)        — real word-sense definitions for the Semantic stage
   • Flask                   — lightweight REST API server
 
-Quick start:
+Quick start (choose the best model available):
   pip install -r requirements.txt
+
+  # Best accuracy (transformer, ~500 MB, requires GPU or is slow on CPU):
+  python -m spacy download en_core_web_trf
+
+  # Good accuracy (~750 MB, fast on CPU):
+  python -m spacy download en_core_web_lg
+
+  # Minimum / fallback (~12 MB):
   python -m spacy download en_core_web_sm
+
+  # Optional — neural coreference resolution:
+  pip install coreferee
+  python -m coreferee install en
+
   python app.py
 
-Then open nlp-lab.html in your browser.
+Then open index.html in your browser (backend must stay running).
 """
 
 import re
@@ -38,26 +51,42 @@ for pkg in ('wordnet', 'omw-1.4'):
 from nltk.corpus import wordnet
 
 # ══════════════════════════════════════════════════════════════════════════
-# INITIALISE spaCy
+# INITIALISE spaCy  —  try best model first, fall back gracefully
 # ══════════════════════════════════════════════════════════════════════════
-print("Loading spaCy model en_core_web_sm …", end=' ', flush=True)
-try:
-    NLP = spacy.load('en_core_web_sm')
-    print("✅")
-except OSError:
-    print("❌\n\nModel not found! Run:\n  python -m spacy download en_core_web_sm\n")
-    NLP = None
+_MODELS = ['en_core_web_trf', 'en_core_web_lg', 'en_core_web_md', 'en_core_web_sm']
+NLP        = None
+MODEL_NAME = None
+
+for _m in _MODELS:
+    try:
+        print(f"Trying spaCy model {_m} …", end=' ', flush=True)
+        NLP        = spacy.load(_m)
+        MODEL_NAME = _m
+        print("✅")
+        break
+    except OSError:
+        print("not installed, trying next…")
+
+if NLP is None:
+    print(
+        "\n❌  No spaCy model found!\n"
+        "    Install at least the small model:\n"
+        "      python -m spacy download en_core_web_sm\n"
+        "    For better accuracy:\n"
+        "      python -m spacy download en_core_web_lg\n"
+    )
 
 # ── Optional: coreferee for neural coreference resolution ──────────────────
 #    Install:  pip install coreferee
 #              python -m coreferee install en
 COREF_ENGINE = None
-try:
-    NLP.add_pipe('coreferee')
-    COREF_ENGINE = 'coreferee'
-    print("✅  coreferee loaded — using neural coreference")
-except Exception as e:
-    print(f"ℹ️   coreferee not available ({e}); using heuristic coreference instead")
+if NLP is not None:
+    try:
+        NLP.add_pipe('coreferee')
+        COREF_ENGINE = 'coreferee'
+        print("✅  coreferee loaded — using neural coreference")
+    except Exception as e:
+        print(f"ℹ️   coreferee not available ({e}); using heuristic coreference instead")
 
 # ══════════════════════════════════════════════════════════════════════════
 # CONSTANT MAPPINGS
@@ -128,11 +157,28 @@ DISPLAY_DEPS = frozenset({
     'aux', 'neg', 'amod', 'advmod',
 })
 
-# Pronoun set for heuristic coreference
-PRONOUNS = frozenset({
-    'it', 'he', 'she', 'they',
-    'this', 'that', 'these', 'those',
-    'him', 'her', 'them',
+# Pronoun sets for heuristic coreference — split by gender/number hints
+PRONOUNS_NEUTER   = frozenset({'it', 'this', 'that'})
+PRONOUNS_PLURAL   = frozenset({'they', 'them', 'these', 'those'})
+PRONOUNS_MASC     = frozenset({'he', 'him', 'his'})
+PRONOUNS_FEM      = frozenset({'she', 'her', 'hers'})
+PRONOUNS_ALL      = PRONOUNS_NEUTER | PRONOUNS_PLURAL | PRONOUNS_MASC | PRONOUNS_FEM
+
+# Typical male/female first-name signals (small heuristic set)
+_MASC_NAMES = frozenset({
+    'james','john','robert','michael','william','david','richard','joseph',
+    'thomas','charles','christopher','daniel','matthew','anthony','mark',
+    'donald','steven','paul','andrew','kenneth','george','josh','jack',
+    'harry','henry','edward','alex','adam','ryan','jake','tom','peter',
+    'raju','raj','amit','arjun','rohan','aman','vikram','nikhil','arun',
+})
+_FEM_NAMES  = frozenset({
+    'mary','patricia','jennifer','linda','barbara','elizabeth','susan',
+    'jessica','sarah','karen','lisa','nancy','betty','margaret','sandra',
+    'ashley','emily','donna','michelle','carol','amanda','melissa','deborah',
+    'stephanie','rebecca','laura','helen','sharon','cynthia','amy','anna',
+    'priya','riya','neha','pooja','ananya','divya','kavya','shreya','sita',
+    'meera','aisha','fatima','sara',
 })
 
 # spaCy UPOS  →  WordNet POS constant
@@ -261,34 +307,74 @@ def resolve_coref_neural(doc, sent_boundaries):
 
 def resolve_coref_heuristic(sentences_data):
     """
-    Heuristic coreference: map singular 'it/this/that' to the most recent
-    singular noun from an earlier sentence; plural to most recent noun.
-    Not perfect — but deterministic and transparent.
+    Improved heuristic coreference resolution.
+
+    Improvements over the original:
+    • Gender-aware: 'he/him/his' prefers masculine names; 'she/her/hers'
+      prefers feminine names; 'it/this/that' prefers inanimate nouns.
+    • Also resolves within-sentence forward references (pronoun in same
+      sentence as antecedent), not just cross-sentence.
+    • Tracks a small window of recent nouns (up to 8) instead of the full
+      history, so stale antecedents from many sentences back are ignored.
+    • Avoids mapping a pronoun to itself.
     """
-    chains = []
-    nouns = []  # accumulated {word, si, wi, plural}
+    chains  = []
+    # Recent noun candidates — capped to a sliding window
+    WINDOW  = 8
+    nouns   = []   # {word, si, wi, plural, gender}  gender ∈ {m, f, n, ?}
+
+    def _gender(tok_text, pos):
+        """Guess grammatical gender from token text."""
+        lo = tok_text.lower()
+        if pos == 'PROP':
+            if lo in _MASC_NAMES: return 'm'
+            if lo in _FEM_NAMES:  return 'f'
+        return 'n' if pos == 'NOUN' else '?'
 
     for si, sent in enumerate(sentences_data):
         for wi, tok in enumerate(sent['tokens']):
             pos  = tok['pos']
             norm = tok['lemma']
 
+            # Accumulate nouns/proper-nouns as potential antecedents
             if pos in ('NOUN', 'PROP'):
                 plural = (tok.get('morph_number') == 'Plur')
-                nouns.append({'word': tok['text'], 'si': si, 'wi': wi, 'plural': plural})
+                nouns.append({
+                    'word': tok['text'], 'si': si, 'wi': wi,
+                    'plural': plural, 'gender': _gender(tok['text'], pos),
+                })
+                if len(nouns) > WINDOW:
+                    nouns.pop(0)
 
-            if pos == 'PRON' and norm in PRONOUNS:
+            # Try to resolve pronouns
+            if pos == 'PRON' and norm in PRONOUNS_ALL:
                 candidate = None
-                if norm in ('it', 'this', 'that'):
-                    # most recent singular noun from a previous sentence
+                pool = [n for n in reversed(nouns)
+                        if not (n['si'] == si and n['wi'] == wi)]  # exclude self
+
+                if norm in PRONOUNS_NEUTER:
+                    # prefer singular inanimate nouns
                     candidate = next(
-                        (n for n in reversed(nouns) if n['si'] < si and not n['plural']),
-                        None
+                        (n for n in pool if not n['plural'] and n['gender'] in ('n', '?')),
+                        next((n for n in pool if not n['plural']), None)
                     )
-                elif norm in ('they', 'them', 'these', 'those'):
-                    candidate = next((n for n in reversed(nouns) if n['si'] < si), None)
-                elif norm in ('he', 'him', 'his', 'she', 'her', 'hers'):
-                    candidate = next((n for n in reversed(nouns) if n['si'] < si), None)
+                elif norm in PRONOUNS_PLURAL:
+                    # prefer plural nouns; fall back to any noun
+                    candidate = next(
+                        (n for n in pool if n['plural']),
+                        next(iter(pool), None)
+                    )
+                elif norm in PRONOUNS_MASC:
+                    # prefer masculine proper nouns, then any singular noun
+                    candidate = next(
+                        (n for n in pool if n['gender'] == 'm'),
+                        next((n for n in pool if not n['plural']), None)
+                    )
+                elif norm in PRONOUNS_FEM:
+                    candidate = next(
+                        (n for n in pool if n['gender'] == 'f'),
+                        next((n for n in pool if not n['plural']), None)
+                    )
 
                 if candidate:
                     chains.append({
@@ -299,55 +385,176 @@ def resolve_coref_heuristic(sentences_data):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# PRAGMATIC ANALYSIS  (using spaCy parse, not raw regex)
+# PRAGMATIC ANALYSIS  (using spaCy parse + expanded rule set)
 # ══════════════════════════════════════════════════════════════════════════
 
 def analyze_pragmatics(doc, text):
     """
-    Derive speech act and intent using the spaCy dependency parse
-    plus a small set of interpretive rules.
+    Derive speech act and intent using the spaCy dependency parse plus an
+    expanded, priority-ordered set of interpretive rules.
+
+    Improvements over v1:
+    - Greeting, farewell, gratitude, apology, offer speech acts
+    - Sarcasm / irony detection (positive words + negative sentiment markers)
+    - General complaint detection (not just environmental)
+    - Conditional / hypothetical detection
+    - Opinion / belief detection
+    - Stronger confidence signals from parse features
+    - Each check is a named Boolean — easy to extend
     """
-    lo = text.lower().strip()
+    lo       = text.lower().strip()
+    stripped = text.strip()
 
-    # ── Detect initial modal via POS ──────────────────────────────────────
+    # ── Structural parse signals ──────────────────────────────────────────
     non_space = [t for t in doc if not t.is_space and not t.is_punct]
-    first_tok  = non_space[0] if non_space else None
-    is_modal_initial = first_tok and first_tok.tag_ == 'MD'
-    modal_word = first_tok.text.lower() if is_modal_initial else ''
+    first_tok = non_space[0] if non_space else None
+    lemmas    = {t.lemma_.lower() for t in doc}
+    pos_tags  = {t.tag_ for t in doc}
+    dep_set   = {t.dep_ for t in doc}
 
-    # Polite request: "Can/Could/Would/Will you …"
+    is_modal_initial = bool(first_tok and first_tok.tag_ == 'MD')
+    modal_word       = first_tok.text.lower() if is_modal_initial else ''
+    has_neg          = 'neg' in dep_set
+    has_past         = bool(pos_tags & {'VBD', 'VBN'})
+    is_question      = stripped.endswith('?') or is_modal_initial
+    is_excl          = stripped.endswith('!')
+
+    # ── Greeting / Farewell ───────────────────────────────────────────────
+    _greet    = {'hello', 'hi', 'hey', 'howdy', 'greetings',
+                 'good morning', 'good afternoon', 'good evening', 'good day'}
+    _farewell = {'bye', 'goodbye', 'farewell', 'see you', 'take care',
+                 'good night', 'later', 'ciao', 'adios'}
+    is_greeting = any(lo.startswith(g) for g in _greet) or lo in _greet
+    is_farewell = any(lo.startswith(f) for f in _farewell) or lo in _farewell
+
+    # ── Gratitude ─────────────────────────────────────────────────────────
+    _thanks = {'thank', 'thanks', 'grateful', 'appreciate', 'gratitude', 'cheers'}
+    is_gratitude = bool(lemmas & _thanks)
+
+    # ── Apology ───────────────────────────────────────────────────────────
+    _sorry = {'sorry', 'apologise', 'apologize', 'apology', 'forgive',
+              'pardon', 'excuse', 'regret'}
+    is_apology = bool(lemmas & _sorry)
+
+    # ── Offer ─────────────────────────────────────────────────────────────
+    _offer_pats = [r'\bshall i\b', r'\bwould you like\b',
+                   r'\bcan i (get|bring|help)\b', r'\bdo you want\b', r'\blet me\b']
+    is_offer = any(re.search(p, lo) for p in _offer_pats)
+
+    # ── Polite indirect request ───────────────────────────────────────────
     polite_modals = {'can', 'could', 'would', 'will', 'shall'}
-    is_polite = (is_modal_initial
-                 and modal_word in polite_modals
-                 and re.match(r'^(can|could|would|will|shall)\s+you\b', lo))
+    is_polite = (
+        is_modal_initial
+        and modal_word in polite_modals
+        and bool(re.match(r'^(can|could|would|will|shall)\s+you\b', lo))
+    )
 
-    # Environmental complaint: describes temperature / comfort
-    env_words = {'hot', 'cold', 'warm', 'freezing', 'boiling',
-                 'stuffy', 'humid', 'noisy', 'dark', 'bright'}
-    is_env = any(t.lemma_ in env_words for t in doc) and not text.strip().endswith('?')
+    # ── Sarcasm / irony ───────────────────────────────────────────────────
+    _sarcasm_positive = {'obviously', 'clearly', 'sure', 'totally', 'great',
+                         'wonderful', 'fantastic', 'brilliant', 'genius',
+                         'right', 'perfect'}
+    _negative_ctx     = {'not', 'never', 'no', "n't", 'hate', 'terrible',
+                         'awful', 'worst', 'horrible', 'fail', 'wrong', 'bad'}
+    is_sarcasm = bool((lemmas & _sarcasm_positive) and (lemmas & _negative_ctx))
 
-    # Rhetorical: "right?", "isn't it?", "don't you think?"
-    is_rhetorical = bool(re.search(r"don't you think|isn't it|right\?$|no\?$", lo))
+    # ── Environmental / comfort complaint ─────────────────────────────────
+    _env_words = {'hot', 'cold', 'warm', 'freezing', 'boiling', 'stuffy',
+                  'humid', 'noisy', 'loud', 'quiet', 'dark', 'bright', 'stale'}
+    is_env = bool(lemmas & _env_words) and not is_question
 
-    # Warning / directive: uses negation with imperative, or safety vocab
-    warning_lemmas = {'careful', 'beware', 'stop', 'never'}
-    has_neg = any(t.dep_ == 'neg' for t in doc)
-    is_warning = has_neg or any(t.lemma_ in warning_lemmas for t in doc)
+    # ── General complaint ─────────────────────────────────────────────────
+    _complaint_words = {'annoying', 'frustrate', 'bother', 'upset', 'disappoint',
+                        'unacceptable', 'terrible', 'awful', 'horrible', 'hate',
+                        'sick', 'tired', 'ridiculous', 'absurd', 'outrageous'}
+    is_complaint = bool(lemmas & _complaint_words) and not is_question
 
-    # Exclamation
-    is_excl = text.strip().endswith('!')
+    # ── Rhetorical question ───────────────────────────────────────────────
+    _rhetorical_pats = [
+        r"don'?t you think", r"isn'?t it", r"right\?$", r"\bno\?$",
+        r"who (doesn'?t|wouldn'?t|couldn'?t)\b", r"what'?s the point",
+        r"why would (anyone|you)\b", r"does it (really|even) matter",
+    ]
+    is_rhetorical = bool(is_question and any(re.search(p, lo) for p in _rhetorical_pats))
 
-    # Past-tense narrative: has a VBD/VBN verb
-    has_past = any(t.tag_ in ('VBD', 'VBN') for t in doc)
-    is_question = text.strip().endswith('?') or is_modal_initial
+    # ── Warning / directive ───────────────────────────────────────────────
+    _warning_lemmas = {'careful', 'beware', 'stop', 'never', 'watch',
+                       'danger', 'avoid', 'warn', 'caution', 'alert'}
+    is_warning = bool(
+        (has_neg and first_tok and first_tok.tag_ == 'VB')
+        or (lemmas & _warning_lemmas)
+    )
 
+    # ── Conditional / hypothetical ────────────────────────────────────────
+    _cond_pats = [r'\bif\b', r'\bunless\b', r'\bsuppose\b',
+                  r'\bassume\b', r'\bimagine\b', r'\bwhat if\b']
+    is_conditional = any(re.search(p, lo) for p in _cond_pats)
+
+    # ── Opinion / belief ─────────────────────────────────────────────────
+    _opinion_lemmas = {'think', 'believe', 'feel', 'reckon', 'suppose',
+                       'guess', 'seem', 'appear', 'consider', 'find'}
+    is_opinion = bool(lemmas & _opinion_lemmas) and not is_question
+
+    # ── Past narrative ────────────────────────────────────────────────────
     is_narrative = has_past and not is_question
 
-    # ── Select speech act ─────────────────────────────────────────────────
+    # ══ Priority-ordered speech act selection ═════════════════════════════
+    if is_greeting:
+        return {
+            'speechAct': 'Greeting', 'icon': '👋',
+            'literal':   'An opening social phrase used to acknowledge the listener.',
+            'intended':  'Establishing or maintaining a friendly relationship; '
+                         'no specific informational content is expected in return.',
+            'confidence': 96,
+        }
+    if is_farewell:
+        return {
+            'speechAct': 'Farewell', 'icon': '🤝',
+            'literal':   'A closing social phrase signalling the end of an interaction.',
+            'intended':  'Politely ending the conversation; may carry warmth or goodwill.',
+            'confidence': 95,
+        }
+    if is_gratitude:
+        return {
+            'speechAct': 'Expression of Gratitude', 'icon': '🙌',
+            'literal':   'Acknowledging a benefit received from the listener.',
+            'intended':  'Strengthening social bonds; acknowledgement ("you\'re welcome") '
+                         'is the typical expected response.',
+            'confidence': 94,
+        }
+    if is_apology:
+        return {
+            'speechAct': 'Apology', 'icon': '🙇',
+            'literal':   'Admitting fault or expressing regret for a past action.',
+            'intended':  'Repairing a social breach and seeking forgiveness or understanding.',
+            'confidence': 93,
+        }
+    if is_sarcasm:
+        return {
+            'speechAct': 'Sarcasm / Irony', 'icon': '😏',
+            'literal':   'Uses positive or affirming language on the surface.',
+            'intended':  'The true meaning is the opposite — expressing criticism, '
+                         'frustration, or mockery through deliberate overstatement.',
+            'confidence': 72,
+        }
+    if is_rhetorical:
+        return {
+            'speechAct': 'Rhetorical Question', 'icon': '🎭',
+            'literal':   'Grammatically a question, but no direct answer is expected.',
+            'intended':  'Used to assert a point strongly, express emotion, or persuade — '
+                         'the answer is already implied by context.',
+            'confidence': 84,
+        }
+    if is_offer:
+        return {
+            'speechAct': 'Offer / Proposal', 'icon': '🤲',
+            'literal':   'Proposing to do something for the benefit of the listener.',
+            'intended':  'Signalling helpfulness or generosity; listener may accept or decline.',
+            'confidence': 88,
+        }
     if is_polite:
         return {
             'speechAct': 'Indirect Request', 'icon': '🙏',
-            'literal':  f'Asking if the listener is able or willing to act (using "{modal_word}").',
+            'literal':   f'Asking if the listener is able or willing to act (using "{modal_word}").',
             'intended':  'A face-saving, polite request — the speaker wants the action done, '
                          'not a literal answer about the listener\'s ability.',
             'confidence': 93,
@@ -360,40 +567,60 @@ def analyze_pragmatics(doc, text):
                          '(e.g., open a window, adjust the thermostat).',
             'confidence': 85,
         }
-    if is_rhetorical:
+    if is_complaint:
         return {
-            'speechAct': 'Rhetorical Question', 'icon': '🎭',
-            'literal':   'Grammatically a question, but no direct answer is expected.',
-            'intended':  'Used to assert a point strongly, express emotion, or persuade — '
-                         'the answer is already implied by context.',
-            'confidence': 82,
+            'speechAct': 'Complaint', 'icon': '😤',
+            'literal':   'Expressing dissatisfaction or displeasure about something.',
+            'intended':  'Seeking acknowledgement, sympathy, or corrective action from '
+                         'the listener.',
+            'confidence': 81,
         }
     if is_warning:
         return {
             'speechAct': 'Warning / Directive', 'icon': '⚠️',
-            'literal':   'Explicitly stating a prohibition or condition.',
-            'intended':  'Cautioning the listener; urging them to take or avoid a specific action.',
+            'literal':   'Explicitly stating a prohibition, risk, or cautionary condition.',
+            'intended':  'Cautioning the listener; urging them to take or avoid a specific '
+                         'action for their own safety or benefit.',
             'confidence': 88,
+        }
+    if is_conditional:
+        return {
+            'speechAct': 'Conditional / Hypothetical', 'icon': '🔀',
+            'literal':   'Presenting a scenario dependent on a condition being true.',
+            'intended':  'Exploring possibilities, negotiating, or setting expectations — '
+                         'the outcome is not stated as fact.',
+            'confidence': 83,
         }
     if is_excl:
         return {
             'speechAct': 'Exclamation', 'icon': '😲',
             'literal':   'An emphatic statement conveying strong feeling.',
-            'intended':  'Sharing heightened emotion — surprise, excitement, frustration or urgency.',
+            'intended':  'Sharing heightened emotion — surprise, excitement, frustration '
+                         'or urgency.',
             'confidence': 84,
         }
     if is_question:
         return {
             'speechAct': 'Direct Question', 'icon': '❓',
             'literal':   'Requesting specific information, confirmation or clarification.',
-            'intended':  'Genuine inquiry — the listener is expected to provide a direct response.',
+            'intended':  'Genuine inquiry — the listener is expected to provide a direct '
+                         'response.',
             'confidence': 90,
+        }
+    if is_opinion:
+        return {
+            'speechAct': 'Opinion / Belief', 'icon': '💭',
+            'literal':   'Sharing a personal view or judgement rather than an objective fact.',
+            'intended':  'Inviting agreement, discussion, or respectful disagreement from '
+                         'the listener.',
+            'confidence': 79,
         }
     if is_narrative:
         return {
             'speechAct': 'Narrative / Report', 'icon': '📖',
             'literal':   'Recounting a sequence of past events in order.',
-            'intended':  'Informing the listener; may implicitly seek empathy or a follow-up reaction.',
+            'intended':  'Informing the listener; may implicitly seek empathy or a '
+                         'follow-up reaction.',
             'confidence': 80,
         }
     return {
@@ -417,7 +644,7 @@ def health():
     return jsonify({
         'status':  'ok',
         'spacy':    NLP is not None,
-        'model':   'en_core_web_sm',
+        'model':    MODEL_NAME or 'none',
         'coref':    COREF_ENGINE,
         'nltk_wn':  True,
     })
@@ -541,8 +768,8 @@ def analyze():
         'pragmatic':    pragmatic,
         'model_info': {
             'library': 'spaCy + NLTK WordNet',
-            'model':   'en_core_web_sm',
-            'coref':   COREF_ENGINE or 'heuristic',
+            'model':    MODEL_NAME or 'unknown',
+            'coref':    COREF_ENGINE or 'heuristic',
         },
     })
 
