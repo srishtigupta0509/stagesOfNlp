@@ -28,11 +28,12 @@ Quick start (choose the best model available):
 Then open index.html in your browser (backend must stay running).
 """
 
+import os
 import re
 import sys
 
 # ── Flask ──────────────────────────────────────────────────────────────────
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
 # ── spaCy ──────────────────────────────────────────────────────────────────
@@ -635,8 +636,17 @@ def analyze_pragmatics(doc, text):
 # FLASK APP
 # ══════════════════════════════════════════════════════════════════════════
 
-app = Flask(__name__)
-CORS(app)   # allow the HTML file (file:// or any origin) to call the API
+# Resolve the project root (one level up from backend/)
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+app = Flask(__name__, static_folder=_ROOT, static_url_path='')
+CORS(app)   # keep CORS for any external callers
+
+
+@app.route('/')
+def index():
+    """Serve the frontend — open http://localhost:5000 in your browser."""
+    return send_from_directory(_ROOT, 'index.html')
 
 
 @app.route('/api/health', methods=['GET'])
@@ -777,5 +787,5 @@ def analyze():
 # ══════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
     print("\n🚀  NLP Lab backend running at http://localhost:5000")
-    print("   Open nlp-lab.html in your browser (backend must stay running)\n")
+    print("   Open  http://localhost:5000  in your browser\n")
     app.run(debug=True, port=5000, host='0.0.0.0')

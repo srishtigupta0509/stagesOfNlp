@@ -832,25 +832,27 @@ let API_BASE = 'http://localhost:5000';
    BACKEND API CALLS
    ════════════════════════════════════════════════════════════════════════ */
 
-/** Ping the Flask backend — updates the server-status bar */
+/** Ping the Flask backend — updates the server-status bar if present */
 async function pingBackend() {
   const dot   = document.getElementById('srv-dot');
   const label = document.getElementById('srv-label');
-  API_BASE = document.getElementById('srv-url-input').value.trim().replace(/\/$/, '');
-  dot.className   = 'srv-dot';
-  label.textContent = 'Checking backend…';
+  const urlEl = document.getElementById('srv-url-input');
+  if (urlEl) API_BASE = urlEl.value.trim().replace(/\/$/, '');
+  if (dot)   dot.className = 'srv-dot';
+  if (label) label.textContent = 'Checking backend…';
   try {
     const res  = await fetch(`${API_BASE}/api/health`, {signal: AbortSignal.timeout(4000)});
     const data = await res.json();
-    dot.className   = 'srv-dot ok';
-    label.textContent =
+    if (dot)   dot.className = 'srv-dot ok';
+    if (label) label.textContent =
       `✅ Backend online — spaCy ${data.model} | coref: ${data.coref} | NLTK WordNet: ${data.nltk_wn}`;
     document.getElementById('btn-process').disabled = false;
   } catch (err) {
-    dot.className   = 'srv-dot err';
-    label.textContent =
+    if (dot)   dot.className = 'srv-dot err';
+    if (label) label.textContent =
       '❌ Backend offline — run:  cd backend && python app.py';
-    document.getElementById('btn-process').disabled = true;
+    /* Do NOT disable the button here — let the fetch in processInput()
+       report the error inline so the button is always clickable.        */
   }
 }
 
@@ -1441,7 +1443,9 @@ function reset(clearText = true) {
 }
 
 function toggleProcessBtn(on) {
-  const offline = document.getElementById('srv-dot').classList.contains('err');
+  /* srv-dot may not exist if the server bar is hidden — default to online */
+  const dot     = document.getElementById('srv-dot');
+  const offline = dot ? dot.classList.contains('err') : false;
   document.getElementById('btn-process').disabled = !on || offline;
 }
 
@@ -1498,13 +1502,15 @@ document.addEventListener('DOMContentLoaded', () => {
   buildPipeline();
   buildStageCards();
   initParticles();
-  pingBackend();   /* auto-check if Flask is running */
+  pingBackend();   /* auto-check — updates status bar if present, safe if not */
 
   document.getElementById('btn-process').addEventListener('click', () => {
     if (!isRunning) processInput();
   });
   document.getElementById('btn-reset').addEventListener('click', () => reset(true));
-  document.getElementById('btn-ping').addEventListener('click', pingBackend);
+  /* btn-ping only exists when the server bar is uncommented */
+  const pingBtn = document.getElementById('btn-ping');
+  if (pingBtn) pingBtn.addEventListener('click', pingBackend);
 
   const stepFn = () => { if (!isRunning) stepForward(); };
   document.getElementById('btn-next').addEventListener('click',     stepFn);
